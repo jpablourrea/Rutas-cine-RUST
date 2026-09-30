@@ -136,7 +136,8 @@ El programa lee las líneas del puerto serial con pyserial, o usa tramas de ejem
 
 **Figura 1.** Salida del receptor en modo demostración: tres tramas normales (con el cine identificado) y tres fallas.
 
-![Figura 1. Salida del receptor en modo demostración](img/figura1.png)
+<img width="1092" height="372" alt="image" src="https://github.com/user-attachments/assets/af0b038d-c400-417a-abe6-cdc83e7bc005" />
+
 
 **Figura 2.**
 
