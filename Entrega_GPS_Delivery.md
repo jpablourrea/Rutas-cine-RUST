@@ -151,6 +151,9 @@ Nosotros como equipo nos vimos en la obligación de conocer el sistema de embebi
 
 La simulación respeta las reglas del estándar NMEA 0183 y no las transforma; la parte que más pesó fue hacer las preguntas correctas y conectar el hardware con el estándar real. El código se desarrolló con ayuda de un LLM, y por eso lo revisé contra la documentación y lo probé en lugar de confiar en él. 
 
+
+Existen bastantes funcionalidades para un microbitv2 que no conocemos normalmente cuando pensamos en un hardware como este, nosotros como estudiantes al ver una pieza de hardware tendemos a pensar que sus funciones son solo de despliegue en luz led, sin embargo es es una computadora completa en miniatura, con un procesador, memoria, comunicación serial por USB, Bluetooth, botones, bocina, micrófono, acelerómetro, magnetómetro y un logo sensible al tacto. En esta práctica la usamos como un receptor GPS de delivery: generó tramas NMEA 0183, las envió por el puerto serial, mostró el resultado de cada una en su pantalla de LEDs y permitió provocar fallas con sus botones. Pasó de ser "una pantalla con luces" a ser un simulador de un equipo real, capaz de comunicarse con otro programa.
+
 # 10. Fuentes
 
 [1] GNSS Metrics. NMEA 0183. <https://gnssmetrics.com/learn/protocols/nmea-0183/> (consultado el 29 de septiembre de 2026).
@@ -184,6 +187,12 @@ La simulación respeta las reglas del estándar NMEA 0183 y no las transforma; l
 //!
 //! Buttons: hold A = send "no fix" frames, hold B = send bad-checksum frames.
 //!
+//! LED matrix (5x5) shows the result of each frame:
+//!   NORMAL       -> route point number (1-9, "1" then "0" for 10), then a check mark
+//!   no fix       -> "?"
+//!   poor signal  -> "!"
+//!   bad checksum -> "X"
+//!
 //! Format of $GPGGA (NMEA 0183):
 //!   $GPGGA,hhmmss.ss,ddmm.mmm,N,dddmm.mmm,W,fix,sats,hdop,alt,M,geoid,M,age,ref*CS
 //!   CS = XOR of every character between '$' and '*', in 2 hex digits.
@@ -193,8 +202,9 @@ La simulación respeta las reglas del estándar NMEA 0183 y no las transforma; l
 
 use core::fmt::Write;
 use cortex_m_rt::entry;
-use embedded_hal::{delay::DelayNs, digital::InputPin};
+use embedded_hal::digital::InputPin;
 use microbit::{
+    display::blocking::Display,
     hal::{
         uarte::{self, Baudrate, Parity},
         Timer,
@@ -219,6 +229,25 @@ const ROUTE: [(u32, u32); 10] = [
     (324981, 1169591),
     (325143, 1169667),
     (325311, 1169509),
+];
+
+type Glyph = [[u8; 5]; 5];
+
+const CHECK: Glyph = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 1], [0, 0, 0, 1, 0], [1, 0, 1, 0, 0], [0, 1, 0, 0, 0]];
+const CROSS: Glyph = [[1, 0, 0, 0, 1], [0, 1, 0, 1, 0], [0, 0, 1, 0, 0], [0, 1, 0, 1, 0], [1, 0, 0, 0, 1]];
+const BANG: Glyph = [[0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 0, 0], [0, 0, 1, 0, 0]];
+const QUESTION: Glyph = [[0, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 0, 1, 1, 0], [0, 0, 0, 0, 0], [0, 0, 1, 0, 0]];
+const DIGITS: [Glyph; 10] = [
+    [[0, 1, 1, 1, 0], [1, 0, 0, 1, 1], [1, 0, 1, 0, 1], [1, 1, 0, 0, 1], [0, 1, 1, 1, 0]], // 0
+    [[0, 0, 1, 0, 0], [0, 1, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 1, 0]], // 1
+    [[0, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 0, 0, 1, 0], [0, 0, 1, 0, 0], [1, 1, 1, 1, 1]], // 2
+    [[1, 1, 1, 1, 0], [0, 0, 0, 0, 1], [0, 1, 1, 1, 0], [0, 0, 0, 0, 1], [1, 1, 1, 1, 0]], // 3
+    [[0, 0, 0, 1, 0], [0, 0, 1, 1, 0], [0, 1, 0, 1, 0], [1, 1, 1, 1, 1], [0, 0, 0, 1, 0]], // 4
+    [[1, 1, 1, 1, 1], [1, 0, 0, 0, 0], [1, 1, 1, 1, 0], [0, 0, 0, 0, 1], [1, 1, 1, 1, 0]], // 5
+    [[0, 1, 1, 1, 0], [1, 0, 0, 0, 0], [1, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 1, 1, 1, 0]], // 6
+    [[1, 1, 1, 1, 1], [0, 0, 0, 0, 1], [0, 0, 0, 1, 0], [0, 0, 1, 0, 0], [0, 1, 0, 0, 0]], // 7
+    [[0, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 1, 1, 1, 0]], // 8
+    [[0, 1, 1, 1, 0], [1, 0, 0, 0, 1], [0, 1, 1, 1, 1], [0, 0, 0, 0, 1], [0, 1, 1, 1, 0]], // 9
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -302,6 +331,7 @@ fn main() -> ! {
     let board = Board::take().unwrap();
 
     let mut timer = Timer::new(board.TIMER0);
+    let mut display = Display::new(board.display_pins);
     let mut serial = uarte::Uarte::new(
         board.UARTE0,
         board.uart.into(),
@@ -347,9 +377,26 @@ fn main() -> ! {
 
         step = (step + 1) % 13;
         t = (t + 10) % 86_400;
-        timer.delay_ms(1000);
+
+        // show the result on the 5x5 LED matrix (blocks ~1 s, like the old delay)
+        match kind {
+            Kind::Normal => {
+                let n = idx + 1;
+                if n < 10 {
+                    display.show(&mut timer, DIGITS[n], 500);
+                } else {
+                    display.show(&mut timer, DIGITS[1], 250);
+                    display.show(&mut timer, DIGITS[0], 250);
+                }
+                display.show(&mut timer, CHECK, 500);
+            }
+            Kind::NoFix => display.show(&mut timer, QUESTION, 1000),
+            Kind::PoorSignal => display.show(&mut timer, BANG, 1000),
+            Kind::BadChecksum => display.show(&mut timer, CROSS, 1000),
+        }
     }
 }
+
 ```
 
 # Anexo B. Interfaz receptora (`receiver.py`)
